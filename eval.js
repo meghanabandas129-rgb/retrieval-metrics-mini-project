@@ -1,44 +1,65 @@
-// eval.js starter. Fill in the four TODOs, then run: node eval.js
-// You should not need any libraries. Plain Node.js is enough.
-const fs = require('fs');
+const fs = require("node:fs");
+const path = require("node:path");
 
-// --- 1. Load the inputs (already done for you) -----------------------------
-// test-set.csv has a header row, then: query,correct_post_ids
-// correct_post_ids may be a semicolon list, e.g. "1024;1025".
-function loadTestSet(path) {
-  const lines = fs.readFileSync(path, 'utf8').trim().split('\n').slice(1);
-  return lines.map(line => {
-    const [query, ids] = line.split(',');
-    return { query, correctIds: ids.split(';').map(Number) };
-  });
-}
-const testSet = loadTestSet('test-set.csv');
+const csv = fs.readFileSync(path.join(__dirname, "test-set.csv"), "utf8");
+const searchResults = JSON.parse(
+  fs.readFileSync(path.join(__dirname, "search-results.json"), "utf8")
+);
 
-// search-results.json maps each query to the top-10 ranked post_id lists that
-// each system returned: { "<query>": { keyword: [...], semantic: [...] } }
-const results = JSON.parse(fs.readFileSync('search-results.json', 'utf8'));
+const testSet = csv.trim().split(/\r?\n/).slice(1).map((line) => {
+  const separator = line.lastIndexOf(",");
+  const query = line.slice(0, separator).trim()
+    .replace(/^"|"$/g, "")
+    .replace(/""/g, '"');
+  const correctIds = new Set(
+    line.slice(separator + 1).trim()
+      .replace(/^"|"$/g, "")
+      .split(";")
+      .map((id) => id.trim())
+  );
 
-// --- 2. TODO: Reciprocal Rank ----------------------------------------------
-// Return 1 / (rank of the FIRST correct id in rankedIds). Return 0 if none of
-// the correct ids appear in rankedIds. Rank is 1-based (first result = rank 1).
-function reciprocalRank(rankedIds, correctIds) {
-  // TODO: implement
-}
+  return { query, correctIds };
+});
 
-// Helper: the 1-based rank of the first correct id, or null if it is a miss.
-function rankOf(rankedIds, correctIds) {
-  // TODO: implement (used only to print the comparison table)
+function firstCorrectRank(rankedIds, correctIds) {
+  const index = rankedIds.slice(0, 10)
+    .findIndex((id) => correctIds.has(String(id)));
+  return index + 1;
 }
 
-// --- 3. TODO: run the evaluation loop --------------------------------------
-// For every query: look up its keyword and semantic ranked lists, compute the
-// reciprocal rank of each, accumulate the RRs, and count a "hit" whenever the
-// correct answer was found in the top 10 (RR > 0).
-// Then compute:
-//   keywordMRR, semanticMRR         = average RR across all queries
-//   keywordRecall, semanticRecall   = hits / number of queries
+function reciprocalRank(rank) {
+  return rank === 0 ? 0 : 1 / rank;
+}
 
-// --- 4. TODO: print a markdown comparison table ----------------------------
-// Print one row per query: | query | keyword rank | semantic rank |  (use "miss"
-// when the answer was not in the top 10), then a final **Summary** row with
-// MRR and Recall@10 for each system, each rounded to 2 decimals.
+const scores = {
+  keyword: { totalRR: 0, hits: 0 },
+  semantic: { totalRR: 0, hits: 0 },
+};
+
+console.log("| Query | Keyword rank | Semantic rank |");
+console.log("|---|---|---|");
+
+for (const { query, correctIds } of testSet) {
+  const results = searchResults[query];
+  if (!results) {
+    throw new Error(`Missing search results for query: ${query}`);
+  }
+
+  const keywordRank = firstCorrectRank(results.keyword, correctIds);
+  const semanticRank = firstCorrectRank(results.semantic, correctIds);
+
+  scores.keyword.totalRR += reciprocalRank(keywordRank);
+  scores.semantic.totalRR += reciprocalRank(semanticRank);
+  scores.keyword.hits += Number(keywordRank > 0);
+  scores.semantic.hits += Number(semanticRank > 0);
+
+  console.log(`| ${query} | ${keywordRank || "miss"} | ${semanticRank || "miss"} |`);
+}
+
+function summary({ totalRR, hits }) {
+  const mrr = (totalRR / testSet.length).toFixed(2);
+  const recall = (hits / testSet.length).toFixed(2);
+  return `**MRR ${mrr} · Recall@10 ${recall}**`;
+}
+
+console.log(`| **Summary** | ${summary(scores.keyword)} | ${summary(scores.semantic)} |`);
